@@ -45,6 +45,10 @@ export class ArchivistWorld {
     } catch (e) {
       this.logWarn(`源配置修正失败 ${e.message}`);
     }
+
+    // 构造时也补一次展示项：面板读的是配置里的值，早一点写上，
+    // 用户升级后第一次打开配置页就能看到路径和占用，不用等下一次备份。
+    this.refreshDisplay();
   }
 
   get id() {
@@ -136,6 +140,12 @@ export class ArchivistWorld {
     if (this.started) return;
     this.started = true;
 
+    // 先把「实际存放位置 / 占用」这两个只读展示项刷一遍。
+    // 它们不能只在备份后写：从老版本升上来的部署，上一次备份是旧版跑的、
+    // 根本没写过这两个键，于是面板上字段空着——看着像功能坏了。
+    // 启动时算一次最省事，也顺带覆盖「用户手动删了旧 zip」的情况。
+    this.refreshDisplay();
+
     // 启动时先补一次：上次备份已经超期（或从没备份过）就立刻做
     const due = this.nextDueAt();
     if (Date.now() >= due) {
@@ -148,6 +158,28 @@ export class ArchivistWorld {
     // 每 TICK_MS 跑一次 tick()：检查是否到点 + 兑现面板上的两个开关
     this.timer = setInterval(() => { void this.tick().catch(() => {}); }, TICK_MS);
     this.timer.unref?.();
+  }
+
+  /**
+   * 刷新面板上的两个只读展示项。
+   *
+   * 只在值真的变了时才写盘——这个函数会被定期调用，无谓的 persist 会一直刷配置。
+   * @returns {boolean} 是否写入过
+   */
+  refreshDisplay() {
+    try {
+      const dest = this.destDir();
+      const stats = this.statsText();
+      const patch = {};
+      if (this.ctx.cfg.lastDest !== dest) patch.lastDest = dest;
+      if (this.ctx.cfg.lastStats !== stats) patch.lastStats = stats;
+      if (!Object.keys(patch).length) return false;
+      this.ctx.persist(patch);
+      return true;
+    } catch (e) {
+      this.logWarn(`刷新展示项失败 ${e.message}`);
+      return false;
+    }
   }
 
   /**
@@ -181,6 +213,10 @@ export class ArchivistWorld {
         await this.restore('面板手动').catch(() => {});
       }
     }
+
+    // ④ 展示项跟着实际情况走：用户可能在文件管理器里手动删过旧 zip，
+    // 或者换了存放位置。只在真的变了时才写盘，平时这一步是空转。
+    this.refreshDisplay();
   }
 
   async stop() {
