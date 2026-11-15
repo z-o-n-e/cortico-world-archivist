@@ -11,14 +11,14 @@
  * 所以恢复 data/ 之后必须重启 Coopanion，否则会被旧内存覆盖。这个提示由调用方负责。
  * 恢复完成会等几秒复查一遍：真被写回去了就当场喊出来，别让人以为恢复成功了。
  */
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { copyFile, rm, mkdir, readdir, readFile, rename, stat } from 'node:fs/promises';
 import { join, basename, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { CONFIG_FILES, CONFIG_DIRS, DATA_SKIP, DATA_SKIP_DIRS, skipAnyDir } from './config.js';
-import { defaultDestDir, isInside, extraTargets } from './backup.js';
+import { defaultDestDir, isInside, extraTargets, readExtensionVersions } from './backup.js';
 
 /** 一个文件的 sha1；读不到给 null。 */
 async function hashFile(path) {
@@ -159,6 +159,27 @@ function stamp(now = new Date()) {
 }
 
 /**
+ * 备份的时间（毫秒）。
+ *
+ * 优先解析文件名里的时间戳（`archivist-2026-11-15T13-14-14.zip`），
+ * 解析不出就退回文件修改时间。都拿不到给 NaN。
+ * @param {string} zipPath
+ * @returns {number}
+ */
+export function backupTimeOf(zipPath) {
+  const m = /archivist-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/.exec(basename(zipPath));
+  if (m) {
+    const t = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
+    if (Number.isFinite(t)) return t;
+  }
+  try {
+    return statSync(zipPath).mtimeMs;
+  } catch {
+    return NaN;
+  }
+}
+
+/**
  * 把「当前状态」里即将被覆盖的部分先存一份。
  * 只备份将被恢复的那几块，避免无谓地复制几十 MB。
  */
@@ -260,6 +281,10 @@ export async function runRestore({ botDir, dataDir, cfg, zipPath, log }) {
   const errors = [];
   const onError = (m) => { errors.push(m); if (errors.length <= 20) log(`跳过 ${m}`); };
 
+  // 备份是什么时候的？用文件名里的时间戳（archivist-YYYY-MM-DDTHH-mm-ss.zip），
+  // 解析不出就退回文件修改时间。用途：提醒「这是几天前的数据」。
+  const backupAt = backupTimeOf(zipPath);
+
   if (!existsSync(zipPath)) {
     return { ok: false, detail: `备份文件不存在: ${zipPath}` };
   }
@@ -293,6 +318,20 @@ export async function runRestore({ botDir, dataDir, cfg, zipPath, log }) {
     const destDir = cfg.destDir?.trim()
       ? resolve(cfg.destDir.trim())
       : defaultDestDir({ botDir, dataDir });
+
+    // 备份里记的扩展版本 vs 现在装的版本：不匹配就明确说出来。
+    // 旧格式数据配新代码是「看着恢复成功、实际缺内容」的典型来源。
+    let versionDrift = [];
+    try {
+      const captured = JSON.parse(await readFile(join(stage, 'EXTENSIONS.json'), 'utf8'));
+      const now = readExtensionVersions(botDir);
+      for (const [name, was] of Object.entries(captured?.packages ?? {})) {
+        const is = now[name];
+        if (is && was && is !== was) versionDrift.push({ name, was, is });
+      }
+    } catch {
+      // 老备份没有这张表
+    }
 
     // ---- ③ 先备份当前状态 ----
     const pre = { files: 0 };
@@ -418,15 +457,40 @@ export async function runRestore({ botDir, dataDir, cfg, zipPath, log }) {
         + '请【完全退出 Coopanion】（不是关窗口）后重新恢复一次。'
       : '⚠️ 必须重启 Coopanion 才生效——记忆类扩展把数据缓存在内存里，否则会把旧数据写回去。';
 
+    // 版本错位：备份是「过去某一刻的数据」，而现在跑的是「此刻的扩展代码」。
+    // 中间只要有一次扩展升级，旧格式数据就可能被新代码误读——多数情况下只是
+    // 丢几个字段(不报错、看着像恢复了)，但严重时新代码解析失败会回退成空数据，
+    // 下一次 flush 就把磁盘上的东西盖掉了。所以这里必须点明，不能只说「恢复了」。
+    const ageHours = Math.round((Date.now() - backupAt) / 3600_000);
+    const age = Number.isFinite(ageHours) && ageHours >= 0
+      ? (ageHours < 24 ? `${ageHours} 小时前` : `${Math.round(ageHours / 24)} 天前`)
+      : null;
+    const versionWarn = age
+      ? `⚠️ 这份备份是 ${age}的。如果这期间有扩展【升级过版本】，旧格式的数据可能与新版本代码不兼容：`
+        + '轻则部分字段被静默忽略（看着像恢复了，其实缺内容），重则新版解析失败后回退成空数据、'
+        + '下一次 flush 把磁盘上的内容盖掉。恢复后请打开涉及的那个扩展确认数据完整。'
+      : '⚠️ 请确认备份时间与当前扩展版本是否匹配：旧格式数据配上新版本代码可能不兼容。';
+
+    // 有版本表就给出具体是哪几个包变了，比泛泛提醒有用得多
+    const driftWarn = versionDrift.length
+      ? `❌ 有 ${versionDrift.length} 个扩展的版本与备份时不同：${
+        versionDrift.slice(0, 5).map((d) => `${d.name} ${d.was}→${d.is}`).join('、')
+      }${versionDrift.length > 5 ? '…' : ''}。`
+      + '这些扩展的数据是旧格式，恢复后请逐个确认内容完整；'
+      + '如果不放心，可以先把该扩展降回备份时的版本再恢复一次。'
+      : '';
+
     return {
       ok: true,
       files: stats.files,
       snapshotDir,
       clobbered,
+      backupAt: Number.isFinite(backupAt) ? new Date(backupAt).toISOString() : null,
+      versionDrift,
       ms,
       detail: `已恢复 ${done.join('、')}（${stats.files} 个文件）。${
         snapshotDir ? `恢复前状态存于 ${snapshotDir}。` : ''
-      }${warn}`,
+      }${warn}${driftWarn || versionWarn}`,
     };
   } catch (e) {
     return { ok: false, detail: `恢复异常: ${e.message}` };

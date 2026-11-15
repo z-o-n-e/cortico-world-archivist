@@ -7,7 +7,7 @@
  *  - 用系统自带能力压缩（Windows: Compress-Archive / macOS: zip），不加第三方依赖
  *  - 任何一步失败都清理临时目录，不留下垃圾
  */
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { copyFile, rm, mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { join, basename, dirname, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -166,7 +166,40 @@ export function extraTargets(botDir, cfg) {
 }
 
 /**
- * 执行一次备份。
+ * 读出当前装的扩展版本表（包名 → 版本）。
+ *
+ * 扩展依赖登记在 `<deploy>/extensions/package.json`，也就是 botDir 的
+ * 上两级目录：`<data>/home/companion` → `<data>/home` → `<data>` → `extensions`。
+ * 读不到就给空表（备份不该因为这个失败）。
+ *
+ * 同时读 node_modules 里实际的 package.json 版本——依赖表写的是范围（`^0.3.4`），
+ * 真正装的是哪个版本要看落盘的那份。
+ *
+ * @param {string} botDir
+ * @returns {Record<string, string>}
+ */
+export function readExtensionVersions(botDir) {
+  const out = {};
+  const extDir = resolve(join(botDir, '..', '..', 'extensions'));
+  try {
+    const pkg = JSON.parse(readFileSync(join(extDir, 'package.json'), 'utf8'));
+    const deps = pkg.dependencies ?? {};
+    for (const name of Object.keys(deps)) {
+      let version = null;
+      try {
+        version = JSON.parse(readFileSync(join(extDir, 'node_modules', name, 'package.json'), 'utf8')).version;
+      } catch {
+        // 装在别处或没装：退回依赖表里写的范围
+      }
+      out[name] = version ?? String(deps[name]);
+    }
+  } catch {
+    // 没有 extensions 目录（单机部署）就算了
+  }
+  return out;
+}
+
+/** 执行一次备份。
  * @param {object} opts
  * @param {string} opts.botDir
  * @param {string} opts.dataDir
@@ -359,6 +392,18 @@ export async function runBackup({ botDir, dataDir, cfg, log }) {
 
     if (!done.length) {
       return { ok: false, detail: `没有可备份的内容（勾选项都没匹配到文件）` };
+    }
+
+    // ---- 4b. 记下此刻装的扩展版本 ----
+    // 恢复时用来比对：备份说的是 0.5.0 时代的数据，现在跑的是 0.6.0 的代码，
+    // 旧格式配上新代码可能被静默误读。只存版本表，几十个包也就几 KB。
+    const extVersions = readExtensionVersions(botDir);
+    if (Object.keys(extVersions).length) {
+      await writeFile(
+        join(stage, 'EXTENSIONS.json'),
+        JSON.stringify({ capturedAt: new Date().toISOString(), packages: extVersions }, null, 2),
+        'utf8',
+      );
     }
 
     // ---- 5. 写一份清单 ----

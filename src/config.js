@@ -17,7 +17,19 @@ export const TITLES_ZH = {
   keepCountNote: '备份是滚动的：超过这个数量就自动删掉最老的一份。',
   copies: '份',
   destDir: '存放位置',
-  destDirNote: '备份 zip 存到哪个文件夹。留空 = 部署目录下的 archivist 文件夹（在 data/ 之外，不会被下一次备份打包进去）。建议放到另一块硬盘或网盘同步目录。',
+  destDirNote: '备份 zip 存到哪个文件夹。留空 = 部署目录下的 archivist 文件夹（在 data/ 之外，不会被下一次备份打包进去）。'
+    + '建议放到另一块硬盘或网盘同步目录。'
+    + '\n\n【升级到 0.3.4 及以后】即使这里填的是 data/ 里面的路径，备份也不会再把自己打进去——'
+    + '存放位置本身会被自动排除。老配置不用改，位置保持原样。'
+    + '\n\n【建议】升级后先拨一次「立即备份一次」，然后看下面「上次结果」里的体积：'
+    + '如果跟前一份差不多，说明已经正常。'
+    + '如果你之前一直用默认位置，旧包可能已经滚成雪球（每份把前一份也包了进去），'
+    + '去下面「实际存放位置」那一栏写出的文件夹里看一眼，用不上的旧 zip 直接删掉就行。',
+  actualDest: '实际存放位置',
+  actualDestNote: '留空时用的默认值由扩展算出来，这里显示的是真正生效的绝对路径。'
+    + '想看或想清理旧备份，把这个路径粘到文件管理器地址栏回车即可。只读，不能改。',
+  backupStats: '备份占用',
+  backupStatsNote: '当前存放位置里有多少份备份、一共占多少空间、最大的一份多大。只读。',
   extraPaths: '额外要备份的路径',
   extraPathsNote: '一行一个，绝对路径或相对部署目录均可。给那些把数据放在子目录、或装在别处的扩展补漏。一般不用填。',
   includeExtensions: '连带扩展包',
@@ -52,7 +64,18 @@ export const TITLES_EN = {
   keepCountNote: 'Rolling: the oldest archive is deleted once this many exist.',
   copies: 'files',
   destDir: 'Destination',
-  destDirNote: 'Folder for the zip files. Empty = the archivist folder in the deployment directory, outside data/, so backups never pack themselves. Prefer another disk or a synced folder.',
+  destDirNote: 'Folder for the zip files. Empty = the archivist folder in the deployment directory, outside data/, so backups never pack themselves. '
+    + 'Prefer another disk or a synced folder.'
+    + '\n\nAs of 0.3.4, even a path inside data/ is safe: the destination itself is always excluded, '
+    + 'so a backup never contains earlier backups. Existing configs need no change.'
+    + '\n\nRecommended after upgrading: run "Back up now" once and compare its size with the previous one. '
+    + 'Similar size means all good. If you were on the old default location, earlier archives may already have snowballed '
+    + '(each one carrying the previous ones) — open the folder shown under "Actual destination" and delete the ones you no longer need.',
+  actualDest: 'Actual destination',
+  actualDestNote: 'When the field above is empty the extension computes a default; this shows the resolved absolute path. '
+    + 'Paste it into your file manager to inspect or clean up old archives. Read-only.',
+  backupStats: 'Space used',
+  backupStatsNote: 'How many archives are in the destination, their total size, and the largest one. Read-only.',
   extraPaths: 'Extra paths to back up',
   extraPathsNote: 'One per line; absolute, or relative to the deployment directory. For extensions that keep data in a subfolder or elsewhere. Usually unnecessary.',
   includeExtensions: 'Include extensions',
@@ -175,7 +198,7 @@ export const DATA_SKIP = new Set([
 
 /** data 目录里不必备份的目录 —— 体积大，且都能重建或重新获取。 */
 export const DATA_SKIP_DIRS = new Set([
-  'fish-sing',      // TTS 运行时（venv，几 GB）
+  'fish-sing',      // TTS 运行时（Python venv，几个 GB，装扩展时重建）
   'socialmedia',    // 浏览器 profile（几百 MB）
   'dream',          // 做梦的 ego 空间状态
   'ego',            // ego 运行目录（含 rounds 临时文件）
@@ -183,8 +206,10 @@ export const DATA_SKIP_DIRS = new Set([
   'pnpm',           // 包管理器缓存
   'blobs',          // 二进制仓库（已在 workspace 里单独处理）
   'media',          // 图片缓存（几百张、近百 MB，可重新抓取）
-  'figures',        // 手办/立绘素材（十几 MB）
-  'emoji',          // 表情包图片（已由 qqbot 的索引+kb 描述，图片可重新收藏）
+  'figures',        // 扩展自带的形象与动作素材（如 whale-all、shenshen-actions），
+                    // 随扩展重装即恢复，不需要备份
+  'emoji',          // QQ 收到的表情包原图（sticker-*.gif/jpg/png）。
+                    // 严格说收过的原图可能已被撤回、不易再找，但按取舍不备份
   'qq-video',       // 视频缓存
   'emote-pics-popup', // 弹窗临时资源
   'bilibili-video', // 视频素材缓存
@@ -197,17 +222,26 @@ export const DATA_SKIP_DIRS = new Set([
  * `DATA_SKIP_DIRS` 只比对 data/ 的顶层，所以像 `stroll/douyin-profile`
  * 这种嵌在扩展自己的目录里的浏览器 profile 会整包被带走（几十 MB，
  * 全是可以重建的缓存，打包时还容易撞上 EBUSY）。
+ *
+ * 名单里只写**确切目录名**。通配由 `skipAnyDir()` 的 `endsWith('-profile')`
+ * 负责——名单里写 `'*-profile'` 是没用的，`Set.has()` 只做全等比较。
  */
 export const DATA_SKIP_ANY_DIR = new Set([
-  'douyin-profile',
-  'browser-profile',
+  'douyin-profile',   // stroll 的抖音浏览器 profile
+  'browser-profile',  // socialmedia 的浏览器 profile
   'chrome-profile',
-  '*-profile',
 ]);
 
 /**
  * 判断某个目录名（任意层级）是否该跳过。
- * 支持 `*-profile` 这种后缀式通配。
+ *
+ * 两条规则：名单全等命中，或者以 `-profile` 结尾。
+ *
+ * ⚠️ 后缀规则是**按名字猜**，不看内容：任何叫 `xxx-profile` 的目录都会被跳过，
+ * 不管里面是可重建的缓存还是用户数据。已知的两个（douyin/browser）都是浏览器
+ * profile，跳对了；但将来若有扩展拿 `-profile` 结尾的名字存重要数据，就会被
+ * 静默漏掉。真遇到那天，把这个后缀规则改窄成明确名单即可。
+ *
  * @param {string} name
  */
 export function skipAnyDir(name) {
@@ -247,6 +281,9 @@ export function defaults() {
     lastRestoreResult: '',
     lastRunAt: '',
     lastResult: '',
+    // 只读展示用：实际生效的存放位置、以及当前占用情况
+    lastDest: '',
+    lastStats: '',
   };
 }
 
@@ -417,6 +454,19 @@ export function configGroups(titles, language = 'zh') {
           'worlds.archivist.lastResult': {
             type: 'string',
             title: titles.lastResult,
+          },
+          // 只读：让用户不用猜路径就能去清理旧备份。
+          // 放 start 组也行，但「实际生效的值」和「上次结果」属于同一类，
+          // 用户升级后第一次打开配置最可能就是来找这个。
+          'worlds.archivist.lastDest': {
+            type: 'string',
+            title: titles.actualDest,
+            description: titles.actualDestNote,
+          },
+          'worlds.archivist.lastStats': {
+            type: 'string',
+            title: titles.backupStats,
+            description: titles.backupStatsNote,
           },
           'worlds.archivist.lastRestoreAt': {
             type: 'string',

@@ -214,7 +214,14 @@ export class ArchivistWorld {
       // 记录结果，供面板和工具读
       const at = new Date().toISOString();
       this.lastRun = { at, result: r.detail, bytes: r.bytes ?? 0 };
-      this.ctx.persist({ lastRunAt: at, lastResult: r.detail });
+      // 顺手把「实际存放位置」和「当前占用」写进配置：
+      // 用户升级后想看旧包在哪、有多大，不用猜路径，照着面板上那一栏去文件管理器就行。
+      this.ctx.persist({
+        lastRunAt: at,
+        lastResult: r.detail,
+        lastDest: this.destDir(),
+        lastStats: this.statsText(),
+      });
 
       if (r.ok) {
         this.log(`备份完成 ${r.file}（${(r.bytes / 1024 / 1024).toFixed(1)} MB，${r.ms} ms）`);
@@ -227,6 +234,34 @@ export class ArchivistWorld {
     });
 
     return this.running;
+  }
+
+  /**
+   * 存放位置当前占用的一句话摘要，给面板只读字段用。
+   *
+   * 目的很具体：用户升级后怀疑「旧备份滚成雪球了」，得能一眼看出
+   * 有多少份、一共多大、最大那份多大——大到离谱说明真的滚过。
+   */
+  statsText() {
+    let list = [];
+    try {
+      list = listBackups(this.destDir());
+    } catch {
+      return '(读取失败)';
+    }
+    if (!list.length) return '还没有备份。';
+    const total = list.reduce((s, x) => s + x.bytes, 0);
+    const max = list.reduce((m, x) => (x.bytes > m ? x.bytes : m), 0);
+    const mb = (n) => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
+    const newest = list[0];
+    const oldest = list[list.length - 1];
+    const day = (p) => {
+      const d = new Date(p.at);
+      const q = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${q(d.getMonth() + 1)}-${q(d.getDate())}`;
+    };
+    return `${list.length} 份，共 ${mb(total)}；最大一份 ${mb(max)}；`
+      + `${day(oldest)} → ${day(newest)}。保留上限 ${this.ctx.cfg.keepCount ?? 14} 份。`;
   }
 
   /** 要恢复的备份文件：配置里选了就用它，留空则取最新的那一份。 */
