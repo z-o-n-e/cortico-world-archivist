@@ -1,0 +1,53 @@
+{
+  "name": "cortico-world-archivist",
+  "version": "0.3.4",
+  "type": "module",
+  "author": {
+    "name": "g_zone"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/z-o-n-e/cortico-world-archivist.git"
+  },
+  "description": "备份与恢复 —— 定期把她的工作区、记忆数据和配置打包成 zip，滚动保留若干份；需要时一键恢复（恢复前自动留存当前状态）。零上下文成本：不进系统前缀、不占工具表。",
+  "license": "MIT",
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
+  "main": "./src/index.js",
+  "files": [
+    "src",
+    "describe.json",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "cortico-world",
+    "cortico",
+    "coopanion",
+    "backup",
+    "restore",
+    "archive"
+  ],
+  "cortico": {
+    "kind": "world",
+    "api": 6,
+    "displayName": "备份与恢复",
+    "tags": [
+      "diagnostics"
+    ],
+    "locales": {
+      "zh": {
+        "displayName": "备份与恢复",
+        "description": "定期把她的一切打包成 zip：工作区（画像/自述/日记/笔记/交接档案）、记忆数据（事实库/向量索引/档案/反思）、配置与密钥。滚动保留若干份，自动清理旧的；需要时从任意一份恢复，恢复前先给当前状态留备份。不占系统前缀，不进工具表。"
+      },
+      "en": {
+        "displayName": "Backup & Restore",
+        "description": "Zip everything about her on a schedule: workspace (persona, diary, notes, handoffs), memory data, and config. Rolling retention with automatic cleanup, plus one-click restore that snapshots the current state first. Costs no prefix space and adds no tools."
+      }
+    },
+    "describe": "describe.json"
+  }
+}
